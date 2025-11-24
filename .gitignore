@@ -1,15 +1,6 @@
 # Data files
 *.npy
 
-# Images
-*.png
-*.jpg
-*.jpeg
-# Globe textures
-!resources/textures/8k_earth_clouds.jpg
-!resources/textures/8k_earth_daymap.jpg
-!resources/textures/8k_stars_milky_way.jpg
-
 # Python
 __pycache__/
 *.py[cod]
