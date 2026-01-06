@@ -31,7 +31,6 @@ DEFAULT_MANUAL_STATION = GroundStationConfig(
     longitude_deg=11.93,
     altitude_m=30.0,
 )
-LINK_BUDGET_MIN_ELEVATION_DEG = 2.5
 TEXTURE_DIR = Path(__file__).resolve().parents[2] / "resources" / "textures"
 EARTH_DAYMAP_FILE = TEXTURE_DIR / "8k_earth_daymap.jpg"
 EARTH_NIGHTMAP_FILE = TEXTURE_DIR / "8k_earth_nightmap.jpg"

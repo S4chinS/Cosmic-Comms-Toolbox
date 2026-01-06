@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import link_budget_math  # type: ignore[import-not-found]
 
@@ -98,7 +98,8 @@ def test_build_parameter_rows_captures_inputs_and_calculations():
         elevations_deg=elevations,
         results=results,
         evaluation_elevation_deg=25.0,
-        min_gs_elevation_deg=5.0,
+        elevation_lower_bound_deg=5.0,
+        elevation_upper_bound_deg=90.0,
         tx_frequency_GHz=8.2,
         tx_power_dBw=8.0,
         tx_losses_dB=1.0,

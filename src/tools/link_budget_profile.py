@@ -87,7 +87,7 @@ class LossCache:
 
 def _generate_elevation_grid(inputs: LinkBudgetInputs) -> np.ndarray:
     min_el = min(inputs.min_gs_elevation_deg, 90.0)
-    lower = max(2.5, min_el)
+    lower = max(0.0, min_el)
     return np.linspace(lower, 90.0, 1000)
 
 
@@ -162,7 +162,8 @@ def run_pipeline(
         evaluation_elevation_deg=min(
             90.0, max(inputs.gs_elevation_deg, inputs.min_gs_elevation_deg)
         ),
-        min_gs_elevation_deg=inputs.min_gs_elevation_deg,
+        elevation_lower_bound_deg=inputs.min_gs_elevation_deg,
+        elevation_upper_bound_deg=90.0,
         tx_frequency_GHz=inputs.frequency_GHz,
         tx_power_dBw=inputs.tx_power_dBw,
         tx_losses_dB=inputs.tx_losses_dB,

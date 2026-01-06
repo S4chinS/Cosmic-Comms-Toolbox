@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List
 
@@ -37,6 +37,22 @@ class PropagationConfig:
     min_elevation_deg: float
     sample_step_seconds: float
     enable_drag: bool
+    # Optional pre-step for numerical propagation: solve for an initial Cartesian
+    # state whose mean (h̄, k̄, alt̄_geo) matches the requested orbit under the
+    # selected force model.
+    use_mean_ic_finder: bool = False
+    mean_ic_target_altitude_km: float | None = None
+    # Spacecraft drag properties (used when enable_drag is True).
+    # Defaults match the previous hard-coded IsotropicDrag(1.0, 2.2) setup.
+    drag_area_m2: float = 0.43
+    drag_cd: float = 3.0
+
+
+@dataclass
+class AnalysisOptions:
+    """Toggle which high-level analyses are performed for a run."""
+
+    compute_ground_station_passes: bool = True
 
 
 @dataclass
@@ -51,10 +67,13 @@ class ScenarioConfig:
 class AnalysisConfig:
     """Aggregates all input required to run the Orekit analysis."""
 
-    ground_station: GroundStationConfig
+    # Primary ground station used when ground-station analysis is enabled.
+    # When ground-station analysis is disabled, this may be None.
+    ground_station: GroundStationConfig | None
     orbit: OrbitConfig
     propagation: PropagationConfig
     scenario: ScenarioConfig
+    options: AnalysisOptions = field(default_factory=AnalysisOptions)
 
 
 @dataclass
@@ -113,3 +132,22 @@ class AnalysisResult:
     timeline_seconds: List[float]
     station_elevation_series: dict[str, List[float]]
     orbit_period_seconds: float
+    mean_ic_report: str | None = None
+    station_azimuth_series: dict[str, List[float]] = field(default_factory=dict)
+    station_az_rate_series: dict[str, List[float]] = field(default_factory=dict)
+    station_el_rate_series: dict[str, List[float]] = field(default_factory=dict)
+    station_range_rate_series: dict[str, List[float]] = field(default_factory=dict)
+    station_range_accel_series: dict[str, List[float]] = field(default_factory=dict)
+    # Optional per-sample orbital metrics for the Orbit Summary tab.
+    orbital_altitude_km: List[float] = field(default_factory=list)
+    semi_major_axis_km: List[float] = field(default_factory=list)
+    perigee_altitude_km: List[float] = field(default_factory=list)
+    apogee_altitude_km: List[float] = field(default_factory=list)
+    eccentricity: List[float] = field(default_factory=list)
+    argument_of_perigee_deg: List[float] = field(default_factory=list)
+    orbital_period_series_s: List[float] = field(default_factory=list)
+    density_kg_m3: List[float] = field(default_factory=list)
+    dynamic_pressure_pa: List[float] = field(default_factory=list)
+    true_anomaly_deg: List[float] = field(default_factory=list)
+    # Optional per-sample force diagnostics (positive magnitudes).
+    drag_force_N: List[float] = field(default_factory=list)

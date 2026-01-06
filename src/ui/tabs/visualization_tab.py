@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta
 
 import numpy as np
+import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -25,6 +26,9 @@ from src.models import GroundStationConfig, GroundTrackPoint, PassStatistic
 from src.ui.constants import EARTH_ROTATION_RATE_RAD_PER_SEC
 from src.ui.globe_math import rotate_vector_z
 from src.ui.opengl import GlobeWidget
+
+STATION_VISUAL_OFFSET_KM = 25.0
+SPEED_OF_LIGHT_MPS = 299_792_458.0
 
 
 def ecef_to_globe_coords(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -82,8 +86,11 @@ class VisualizationTabMixin:
         splitter.addWidget(left_panel)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
+        viewer_tab = QWidget()
+        viewer_layout = QVBoxLayout(viewer_tab)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
         globe_panel = self._build_visual_globe_panel()
-        right_layout.addWidget(globe_panel, stretch=1)
+        viewer_layout.addWidget(globe_panel, stretch=1)
         controls_row = QHBoxLayout()
         self.visual_play_button = QPushButton("Play")
         self.visual_play_button.setEnabled(False)
@@ -108,7 +115,13 @@ class VisualizationTabMixin:
         self.visual_pass_status_label = QLabel("Run an analysis to populate passes.")
         self.visual_pass_status_label.setWordWrap(True)
         controls_row.addWidget(self.visual_pass_status_label, stretch=1)
-        right_layout.addLayout(controls_row)
+        viewer_layout.addLayout(controls_row)
+        graphs_tab = self._build_visual_graph_tab()
+        self.visual_view_tabs = QTabWidget()
+        self.visual_view_tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.visual_view_tabs.addTab(viewer_tab, "Viewer")
+        self.visual_view_tabs.addTab(graphs_tab, "Graphs")
+        right_layout.addWidget(self.visual_view_tabs, stretch=1)
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
@@ -136,6 +149,57 @@ class VisualizationTabMixin:
         layout.addLayout(brightness_row)
         self._handle_visual_brightness_changed(self.visual_brightness_slider.value())
         return panel
+
+    def _build_visual_graph_tab(self) -> QWidget:
+        """Create the pass-metric plotting tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.visual_graph_combo = QComboBox()
+        self.visual_graph_combo.addItems(
+            [
+                "Doppler shift",
+                "Doppler rate",
+                "Azimuth angle",
+                "Elevation angle",
+                "Azimuth rate",
+                "Elevation rate",
+            ]
+        )
+        self.visual_graph_combo.setEnabled(False)
+        self.visual_graph_combo.currentIndexChanged.connect(
+            self._handle_visual_graph_metric_changed
+        )  # type: ignore[attr-defined]
+        layout.addWidget(self.visual_graph_combo)
+        self.visual_graph_plot = pg.PlotWidget(title="Select a pass to populate graphs.")
+        self.visual_graph_plot.setLabel("bottom", "Minutes from AOS", units="min")
+        self.visual_graph_plot.showGrid(x=True, y=True, alpha=0.3)
+        layout.addWidget(self.visual_graph_plot, stretch=1)
+        self._visual_graph_data = None
+        self._update_visual_graph_placeholder("Select a pass to populate graphs.")
+        return tab
+
+    def _update_visual_graph_placeholder(self, message: str) -> None:
+        """Clear the graph panel and show a status message."""
+        if getattr(self, "visual_graph_plot", None) is None:
+            return
+        self.visual_graph_plot.clear()
+        self.visual_graph_plot.setTitle(message)
+        self.visual_graph_plot.setLabel("bottom", "Minutes from AOS", units="min")
+        self.visual_graph_plot.setLabel("left", "", units="")
+        if getattr(self, "visual_graph_combo", None) is not None:
+            self.visual_graph_combo.setEnabled(False)
+
+    def _reset_visual_graph_panel(self, message: str | None = None) -> None:
+        """Reset stored graph data and update placeholder text."""
+        self._visual_graph_data = None
+        text = message or "Select a pass to populate graphs."
+        self._update_visual_graph_placeholder(text)
+        combo = getattr(self, "visual_graph_combo", None)
+        if combo is not None:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
 
     def _build_visualization_placeholder_panel(self) -> QWidget:
         """Show a hint in the Mission tab pointing to the Visualization tab."""
@@ -282,6 +346,8 @@ class VisualizationTabMixin:
         self._visual_anim_fraction = 0.0
         self._visual_contact_window = (pass_stat.aos, pass_stat.los)
         self._visual_station_ecef = self._resolve_station_coordinates(pass_stat)
+        first_timestamp = track[0].timestamp if track else None
+        self._update_visualization_focus_point(first_timestamp)
         self._update_visualization_pass_geometry(track)
         slider_max = max(len(track) - 1, 0)
         if self.visual_time_slider:
@@ -301,6 +367,23 @@ class VisualizationTabMixin:
                 f"{pass_stat.los:%H:%M:%S} UTC (max {pass_stat.max_elevation_deg:.1f}°)"
             )
         self._update_visualization_frame()
+        self._prepare_visualization_graph_data(pass_stat)
+
+    def _prepare_visualization_graph_data(self, pass_stat: PassStatistic) -> None:
+        """Extract per-pass look-angle series for graphing."""
+        plot_ready = getattr(self, "visual_graph_plot", None) is not None
+        if not plot_ready:
+            return
+        series = self._extract_pass_graph_series(pass_stat)
+        if series is None:
+            self._reset_visual_graph_panel("No samples available for this pass.")
+            return
+        self._visual_graph_data = series
+        combo = getattr(self, "visual_graph_combo", None)
+        if combo is not None:
+            combo.setEnabled(True)
+        current_index = combo.currentIndex() if combo is not None else 0
+        self._render_visual_graph_metric(current_index)
 
     def _extract_pass_track(self, pass_stat: PassStatistic) -> list[GroundTrackPoint]:
         """Return the subset of ground-track points covering the selected pass."""
@@ -315,6 +398,192 @@ class VisualizationTabMixin:
             if start <= point.timestamp <= end
         ]
         return segment or list(self._last_result.ground_track)
+
+    def _extract_pass_graph_series(
+        self, pass_stat: PassStatistic
+    ) -> dict[str, np.ndarray] | None:
+        """Slice the per-station time series down to the requested pass."""
+        result = getattr(self, "_last_result", None)
+        if result is None or not getattr(result, "timeline_seconds", None):
+            return None
+        timeline = np.asarray(result.timeline_seconds, dtype=float)
+        if timeline.size == 0:
+            return None
+        station_series = getattr(result, "station_elevation_series", {})
+        station_name = pass_stat.station_name or next(iter(station_series), None)
+        if station_name is None:
+            return None
+        if station_name not in station_series:
+            if station_series:
+                station_name = next(iter(station_series))
+            else:
+                return None
+
+        scenario_start = None
+        config = getattr(self, "_current_config", None)
+        if config is not None and getattr(config, "scenario", None) is not None:
+            scenario_start = config.scenario.start_time
+        if scenario_start is None:
+            scenario_start = self._visual_reference_epoch
+        if scenario_start is None:
+            return None
+
+        propagation = getattr(config, "propagation", None) if config else None
+        sample_step = float(getattr(propagation, "sample_step_seconds", 10.0))
+
+        def _series_from(source: dict[str, list[float]]) -> np.ndarray:
+            values = source.get(station_name)
+            return (
+                np.asarray(values, dtype=float)
+                if values is not None
+                else np.array([], dtype=float)
+            )
+
+        elev = _series_from(station_series)
+        azimuth = _series_from(getattr(result, "station_azimuth_series", {}))
+        az_rate = _series_from(getattr(result, "station_az_rate_series", {}))
+        el_rate = _series_from(getattr(result, "station_el_rate_series", {}))
+        range_rate = _series_from(getattr(result, "station_range_rate_series", {}))
+        range_accel = _series_from(getattr(result, "station_range_accel_series", {}))
+
+        expected = timeline.size
+        for array in (elev, azimuth, az_rate, el_rate, range_rate, range_accel):
+            if array.size != expected or expected == 0:
+                return None
+
+        aos_sec = (pass_stat.aos - scenario_start).total_seconds()
+        los_sec = (pass_stat.los - scenario_start).total_seconds()
+        pad_seconds = max(sample_step, 5.0)
+        mask = (timeline >= aos_sec - pad_seconds) & (timeline <= los_sec + pad_seconds)
+        if not np.any(mask):
+            return None
+
+        return {
+            "times_minutes": (timeline[mask] - aos_sec) / 60.0,
+            "azimuth_deg": azimuth[mask],
+            "elevation_deg": elev[mask],
+            "az_rate_deg_s": az_rate[mask],
+            "el_rate_deg_s": el_rate[mask],
+            "range_rate_mps": range_rate[mask],
+            "range_accel_mps2": range_accel[mask],
+            "station_name": station_name,
+        }
+
+    def _handle_visual_graph_metric_changed(self, index: int) -> None:
+        """Update the pass-metric plot when the selected metric changes."""
+        self._render_visual_graph_metric(index)
+
+    def _render_visual_graph_metric(self, index: int) -> None:
+        """Render the selected pass metric."""
+        plot = getattr(self, "visual_graph_plot", None)
+        data = getattr(self, "_visual_graph_data", None)
+        if plot is None:
+            return
+        if not data:
+            self._update_visual_graph_placeholder("Select a pass to populate graphs.")
+            return
+        times = data.get("times_minutes")
+        if times is None or len(times) == 0:
+            self._update_visual_graph_placeholder("No samples available for this pass.")
+            return
+
+        station_name = data.get("station_name", "Station")
+        if index == 0:
+            values = self._compute_doppler_shift(data.get("range_rate_mps"))
+            y_label = "Doppler shift"
+            units = "Hz"
+            title = "Doppler Shift"
+        elif index == 1:
+            values = self._compute_doppler_rate(data.get("range_accel_mps2"))
+            y_label = "Doppler rate"
+            units = "Hz/s"
+            title = "Doppler Rate"
+        elif index == 2:
+            values = np.asarray(data.get("azimuth_deg"))
+            y_label = "Azimuth"
+            units = "deg"
+            title = "Azimuth Angle"
+        elif index == 3:
+            values = np.asarray(data.get("elevation_deg"))
+            y_label = "Elevation"
+            units = "deg"
+            title = "Elevation Angle"
+        elif index == 4:
+            values = np.asarray(data.get("az_rate_deg_s"))
+            y_label = "Azimuth rate"
+            units = "deg/s"
+            title = "Required Azimuth Rate"
+        else:
+            values = np.asarray(data.get("el_rate_deg_s"))
+            y_label = "Elevation rate"
+            units = "deg/s"
+            title = "Required Elevation Rate"
+
+        if values.size != times.size:
+            self._update_visual_graph_placeholder("Incomplete samples for this metric.")
+            return
+
+        times_ds, values_ds = self._downsample_graph_series(times, values)
+        plot.clear()
+        plot.setTitle(f"{title} — {station_name}")
+        plot.setLabel("bottom", "Minutes from AOS", units="min")
+        plot.setLabel("left", y_label, units=units)
+        plot.plot(times_ds, values_ds, pen=pg.mkPen("#76c7ff", width=2))
+        plot.getViewBox().autoRange()
+
+    def _compute_doppler_shift(self, range_rate: np.ndarray | None) -> np.ndarray:
+        """Convert the line-of-sight range rate into Doppler shift."""
+        if range_rate is None:
+            return np.array([])
+        freq_input = getattr(self, "lb_frequency_input", None)
+        freq_ghz = float(freq_input.value()) if freq_input is not None else 8.2
+        freq_hz = max(freq_ghz, 0.0) * 1e9
+        if freq_hz <= 0.0:
+            return np.zeros_like(range_rate)
+        scale = freq_hz / SPEED_OF_LIGHT_MPS
+        return -np.asarray(range_rate) * scale
+
+    def _compute_doppler_rate(self, range_accel: np.ndarray | None) -> np.ndarray:
+        """Convert line-of-sight acceleration into Doppler rate."""
+        if range_accel is None:
+            return np.array([])
+        freq_input = getattr(self, "lb_frequency_input", None)
+        freq_ghz = float(freq_input.value()) if freq_input is not None else 8.2
+        freq_hz = max(freq_ghz, 0.0) * 1e9
+        if freq_hz <= 0.0:
+            return np.zeros_like(range_accel)
+        scale = freq_hz / SPEED_OF_LIGHT_MPS
+        return -np.asarray(range_accel) * scale
+
+    def _downsample_graph_series(
+        self, times: np.ndarray, values: np.ndarray, max_points: int = 2000
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Reduce plotted sample count to keep PyQtGraph responsive."""
+        if times.size <= max_points:
+            return times, values
+        indices = np.linspace(0, times.size - 1, max_points, dtype=int)
+        indices = np.unique(indices)
+        return times[indices], values[indices]
+
+    def _handle_visual_frequency_changed(self, _value: float) -> None:
+        """Re-render Doppler plots when the link-budget frequency changes."""
+        combo = getattr(self, "visual_graph_combo", None)
+        if combo is None:
+            return
+        current = combo.currentIndex()
+        if current not in (0, 1):
+            return
+        self._render_visual_graph_metric(current)
+
+    def _attach_visualization_frequency_listener(self) -> None:
+        """Connect the link-budget frequency input so Doppler plots stay in sync."""
+        if getattr(self, "_visual_freq_listener_connected", False):
+            return
+        freq_input = getattr(self, "lb_frequency_input", None)
+        if freq_input is None:
+            return
+        freq_input.valueChanged.connect(self._handle_visual_frequency_changed)  # type: ignore[attr-defined]
+        self._visual_freq_listener_connected = True
 
     def _resolve_station_coordinates(
         self, pass_stat: PassStatistic
@@ -338,7 +607,7 @@ class VisualizationTabMixin:
     def _station_to_ecef_km(
         self, station: GroundStationConfig
     ) -> tuple[float, float, float]:
-        """Convert a ground-station lat/lon/alt to ECEF coordinates in kilometers."""
+        """Convert a ground-station lat/lon/alt to pure ECEF coordinates in kilometers."""
         lat = math.radians(station.latitude_deg)
         lon = math.radians(station.longitude_deg)
         alt_km = station.altitude_m / 1000.0
@@ -349,7 +618,7 @@ class VisualizationTabMixin:
         x = (N + alt_km) * math.cos(lat) * math.cos(lon)
         y = (N + alt_km) * math.cos(lat) * math.sin(lon)
         z = (N * (1 - e2) + alt_km) * sin_lat
-        return ecef_to_globe_coords(x, y, z)
+        return (x, y, z)
 
     def _seconds_since_reference(self, timestamp: datetime) -> float:
         """Return elapsed seconds from the visualization reference epoch."""
@@ -361,7 +630,7 @@ class VisualizationTabMixin:
     def _convert_vector_to_current_frame(
         self, vector: tuple[float, float, float], timestamp: datetime
     ) -> tuple[float, float, float]:
-        """Convert an ECEF vector into the currently selected frame."""
+        """Convert a globe-space vector into the currently selected frame."""
         if self._visual_frame_mode != "ECI":
             return vector
         delta = self._seconds_since_reference(timestamp)
@@ -419,6 +688,7 @@ class VisualizationTabMixin:
             self.visual_globe_widget.update_direction_arrow(None, None)
             self.visual_globe_widget.set_sun_datetime(None)
             self.visual_globe_widget.update_direction_arrow(None, None)
+            self.visual_globe_widget.set_focus_point(None)
         self._visual_pass_track = None
         self._visual_selected_pass = None
         self._visual_station_ecef = None
@@ -434,6 +704,7 @@ class VisualizationTabMixin:
             self.visual_play_button.setText("Play")
         if message and self.visual_pass_status_label:
             self.visual_pass_status_label.setText(message)
+        self._reset_visual_graph_panel(message)
 
     def _toggle_visualization_playback(self) -> None:
         """Play or pause the current pass animation."""
@@ -537,6 +808,7 @@ class VisualizationTabMixin:
             timestamp = point.timestamp + alpha * dt
         coords = tuple(coords_vec.tolist())
         self._update_visual_earth_rotation(timestamp)
+        self._update_visualization_focus_point(timestamp)
         if self.visual_globe_widget:
             self.visual_globe_widget.set_sun_datetime(timestamp)
         self.visual_globe_widget.update_satellite_position(coords)
@@ -554,12 +826,31 @@ class VisualizationTabMixin:
     def _get_station_position(
         self, timestamp: datetime
     ) -> tuple[float, float, float] | None:
-        """Return the station position vector in the current frame."""
+        """Return the station position vector in the current frame, converted to globe coordinates."""
         if self._visual_station_ecef is None:
             return None
-        return self._convert_vector_to_current_frame(
-            self._visual_station_ecef, timestamp
-        )
+        # First align with the globe texture coordinate system (ECEF → globe)
+        globe_vec = np.array(ecef_to_globe_coords(*self._visual_station_ecef), dtype=float)
+        # Nudge outward slightly so the marker/link sit above the surface for visibility
+        length = np.linalg.norm(globe_vec)
+        if length > 1e-6 and STATION_VISUAL_OFFSET_KM > 0.0:
+            scale = (length + STATION_VISUAL_OFFSET_KM) / length
+            globe_vec *= scale
+        # Then rotate into the current reference frame (ECI adds the time-varying spin)
+        return self._convert_vector_to_current_frame(tuple(globe_vec.tolist()), timestamp)
+
+    def _update_visualization_focus_point(
+        self, timestamp: datetime | None
+    ) -> None:
+        """Keep the camera focus aligned with the active ground station."""
+        widget = getattr(self, "visual_globe_widget", None)
+        if widget is None:
+            return
+        if timestamp is None:
+            widget.set_focus_point(None)
+            return
+        station_point = self._get_station_position(timestamp)
+        widget.set_focus_point(station_point if station_point is not None else None)
 
     def _update_visual_earth_rotation(self, timestamp: datetime | None) -> None:
         """Rotate the globe actors to match Earth orientation in the selected frame."""

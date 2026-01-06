@@ -12,7 +12,7 @@ pytest.importorskip("cartopy")
 pytest.importorskip("moderngl")
 pytest.importorskip("orekit")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from models import GroundStationConfig
 from ui.main_window import GroundStationApp

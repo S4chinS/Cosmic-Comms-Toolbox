@@ -271,7 +271,8 @@ def build_parameter_rows(
     elevations_deg: Sequence[float],
     results: dict,
     evaluation_elevation_deg: float,
-    min_gs_elevation_deg: float,
+    elevation_lower_bound_deg: float,
+    elevation_upper_bound_deg: float,
     tx_frequency_GHz: float,
     tx_power_dBw: float,
     tx_losses_dB: float,
@@ -395,7 +396,8 @@ def build_parameter_rows(
     _set("EIRP", _format_value(eirp_boresight_dBw), "dBW")
     _set("Spacecraft Altitude", _format_value(satellite_altitude_km, 0), "km")
     _set("GS Elevation Angle", _format_value(eval_elevation, 1), "deg")
-    _set("Minimum GS Elevation", _format_value(min_gs_elevation_deg, 1), "deg")
+    _set("Elevation Lower Bound", _format_value(elevation_lower_bound_deg, 1), "deg")
+    _set("Elevation Upper Bound", _format_value(elevation_upper_bound_deg, 1), "deg")
     _set("Slant Range", _format_value(slant_km, 0), "km")
     _set("Free Space Path Loss (FSPL)", _format_value(-fspl_dB), "dB")
 
@@ -440,7 +442,8 @@ def build_parameter_rows(
         "EIRP",
         "Spacecraft Altitude",
         "GS Elevation Angle",
-        "Minimum GS Elevation",
+        "Elevation Lower Bound",
+        "Elevation Upper Bound",
         "Slant Range",
         "Free Space Path Loss (FSPL)",
         "Gaseous Loss",

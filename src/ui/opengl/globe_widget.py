@@ -181,28 +181,61 @@ def _generate_sphere(
     phi_segments: int,
     *,
     invert_normals: bool = False,
+    flattening: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Generate a sphere or oblate ellipsoid mesh.
+
+    Args:
+        radius: Equatorial radius
+        theta_segments: Number of longitudinal segments
+        phi_segments: Number of latitudinal segments
+        invert_normals: If True, flip normals inward
+        flattening: Earth flattening factor (0 for sphere, 1/298.257 for WGS84)
+
+    Returns:
+        Tuple of (vertices, indices) arrays
+    """
     vertices: list[list[float]] = []
     indices: list[int] = []
+
+    # Calculate polar radius for oblate ellipsoid
+    polar_scale = 1.0 - flattening
+
     for j in range(phi_segments + 1):
         v = j / phi_segments
         phi = math.pi * v
         for i in range(theta_segments + 1):
             u = i / theta_segments
             theta = 2 * math.pi * u
+
+            # Generate ellipsoid coordinates
             x = radius * math.sin(phi) * math.cos(theta)
             y = radius * math.sin(phi) * math.sin(theta)
-            z = radius * math.cos(phi)
-            nx = math.sin(phi) * math.cos(theta)
-            ny = math.sin(phi) * math.sin(theta)
-            nz = math.cos(phi)
+            z = radius * polar_scale * math.cos(phi)
+
+            # Calculate proper normals for ellipsoid
+            # For ellipsoid, normals are not radial - need to account for scaling
+            nx = math.sin(phi) * math.cos(theta) / radius
+            ny = math.sin(phi) * math.sin(theta) / radius
+            nz = math.cos(phi) / (radius * polar_scale)
+            # Normalize the normal vector
+            n_len = math.sqrt(nx * nx + ny * ny + nz * nz)
+            nx /= n_len
+            ny /= n_len
+            nz /= n_len
+
             if invert_normals:
                 nx, ny, nz = -nx, -ny, -nz
+
+            # Texture coordinates based on spherical coordinates
             lon = math.atan2(x, y)
-            lat = math.asin(z / radius)
+            # For lat calculation, use the actual position
+            r_xy = math.sqrt(x * x + y * y)
+            lat = math.atan2(z, r_xy)
             tex_u = 0.5 - lon / (2 * math.pi)
             tex_v = 0.5 - lat / math.pi
             vertices.append([x, y, z, nx, ny, nz, tex_u, tex_v])
+
     for j in range(phi_segments):
         for i in range(theta_segments):
             a = j * (theta_segments + 1) + i
@@ -231,6 +264,8 @@ class OrbitCamera:
         self.view_angle_deg = view_angle_deg
         self._zoom_scale = 1.0
         self.azimuth_rad = 0.0
+        self._focus_point = np.zeros(3, dtype=np.float32)
+        self._orbit_offset = np.zeros(3, dtype=np.float32)
         self._base_distance = math.sqrt(radius_km**2 + height_km**2)
         self._base_pitch = math.atan2(height_km, radius_km)
         self.pitch_rad = self._base_pitch
@@ -252,7 +287,7 @@ class OrbitCamera:
         self._clamp_pitch()
         distance = self._current_distance()
         cos_pitch = math.cos(self.pitch_rad)
-        self.position = np.array(
+        offset = np.array(
             [
                 distance * cos_pitch * math.cos(self.azimuth_rad),
                 distance * cos_pitch * math.sin(self.azimuth_rad),
@@ -260,6 +295,19 @@ class OrbitCamera:
             ],
             dtype=np.float32,
         )
+        self._orbit_offset = offset
+        self.position = self._focus_point + offset
+
+    def set_focus_point(self, target: Iterable[float]) -> None:
+        coords = tuple(target)[:3]
+        if len(coords) < 3:
+            raise ValueError("Focus point must provide 3 coordinates")
+        self._focus_point = np.array(coords, dtype=np.float32)
+        self._update_position()
+
+    @property
+    def focus_point(self) -> np.ndarray:
+        return self._focus_point.copy()
 
     def set_rotation(self, angle_rad: float) -> None:
         self.azimuth_rad = angle_rad
@@ -299,7 +347,7 @@ class OrbitCamera:
 
     def view_matrix(self) -> np.ndarray:
         eye = self.position
-        target = np.zeros(3, dtype=np.float32)
+        target = self._focus_point
         up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         return _look_at(eye, target, up)
 
@@ -598,7 +646,16 @@ class GlobeWidget(QOpenGLWidget):
         self._pending_arrow_vertices = vertices
         self.update()
 
+    def set_focus_point(
+        self, position_km: Optional[tuple[float, float, float]]
+    ) -> None:
+        """Recenter the camera orbit target."""
+        target = (0.0, 0.0, 0.0) if position_km is None else position_km
+        self._camera.set_focus_point(target)
+        self.update()
+
     def reset_camera(self) -> None:
+        self._camera.set_focus_point((0.0, 0.0, 0.0))
         self._camera.set_rotation(0.0)
         self._camera.reset_pitch()
         self._camera.reset_zoom()
@@ -840,12 +897,19 @@ class GlobeWidget(QOpenGLWidget):
 
     def _build_meshes(self) -> None:
         assert self._ctx is not None
+        # WGS84 flattening: 1/298.257223563
+        wgs84_flattening = 1.0 / 298.257223563
+
+        # Earth with WGS84 oblate ellipsoid shape
         sphere_data = _generate_sphere(
             self._radius_km,
             theta_segments=180,
             phi_segments=90,
+            flattening=wgs84_flattening,
         )
         self._mesh_buffers["earth"] = self._create_mesh_buffers(*sphere_data)
+
+        # Starfield (spherical background)
         starfield_data = _generate_sphere(
             self._radius_km * 12.0,
             theta_segments=90,
@@ -853,12 +917,17 @@ class GlobeWidget(QOpenGLWidget):
             invert_normals=True,
         )
         self._mesh_buffers["starfield"] = self._create_mesh_buffers(*starfield_data)
+
+        # Clouds with same flattening as Earth
         clouds_data = _generate_sphere(
             self._radius_km * 1.01,
             theta_segments=180,
             phi_segments=90,
+            flattening=wgs84_flattening,
         )
         self._mesh_buffers["clouds"] = self._create_mesh_buffers(*clouds_data)
+
+        # Satellite (spherical representation)
         sat_data = _generate_sphere(
             1.0,
             theta_segments=24,
@@ -1230,6 +1299,7 @@ class GlobeWidget(QOpenGLWidget):
     def _draw_link(self, view: np.ndarray) -> None:
         if self._link_vbo is None or self._link_vertex_count == 0 or self._ctx is None:
             return
+        self._ctx.disable(moderngl.DEPTH_TEST)
         vao = self._vaos.get("link")
         if vao is None:
             vao = self._build_line_vao("link", self._link_vbo)
@@ -1241,4 +1311,5 @@ class GlobeWidget(QOpenGLWidget):
         prog["color"].value = (0.0, 0.902, 0.451, 1.0)
         self._ctx.line_width = 4
         vao.render(mode=moderngl.LINES, vertices=self._link_vertex_count)
+        self._ctx.enable(moderngl.DEPTH_TEST)
 

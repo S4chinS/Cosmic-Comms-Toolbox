@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -33,8 +34,13 @@ from src.ui.opengl import GlobeWidget
 class MissionTabMixin:
     """Logic for building and updating the mission analysis tab."""
 
+    _WGS84_EQUATORIAL_RADIUS_KM = 6378.137
+    _WGS84_J2 = 1.08262668e-3
+    _EARTH_MU_KM3_S2 = 398600.4418
+    _TROPICAL_YEAR_DAYS = 365.2422
+
     def _build_mission_analysis_tab(self) -> QWidget:
-        """Create the Mission Analysis tab with configuration and mission map."""
+        """Create the Mission Configuration tab with configuration and mission map."""
         tab = QWidget()
         tab_layout = QVBoxLayout(tab)
         config_widget = QWidget()
@@ -43,10 +49,22 @@ class MissionTabMixin:
         config_layout.addWidget(self._build_scenario_group())
         config_layout.addWidget(self._build_propagation_group())
         button_row = QHBoxLayout()
+        # Stack Run/Stop vertically so the stop button appears directly under Run.
+        button_column = QVBoxLayout()
         self.run_button = QPushButton("Run Analysis")
         self._set_run_button_state("dirty")
         self.run_button.clicked.connect(self._handle_run_clicked)  # type: ignore[arg-type]
-        button_row.addWidget(self.run_button)
+        button_column.addWidget(self.run_button)
+        # Stop button is disabled until a run is in progress.
+        from PySide6.QtWidgets import QPushButton as _QPushButtonAlias  # local alias to avoid circular import hints
+
+        self.stop_button = getattr(self, "stop_button", None)
+        if self.stop_button is None:
+            self.stop_button = _QPushButtonAlias("Stop")
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self._handle_stop_clicked)  # type: ignore[arg-type]
+        button_column.addWidget(self.stop_button)
+        button_row.addLayout(button_column)
         self.run_progress = QProgressBar()
         self.run_progress.setRange(0, 100)
         self.run_progress.setValue(0)
@@ -73,17 +91,20 @@ class MissionTabMixin:
         button_row.addWidget(self.run_progress)
         config_layout.addLayout(button_row)
         config_layout.addStretch(1)
+
+        # Make the configuration column scrollable so the main window can be resized
+        # to smaller heights without forcing all controls to remain visible.
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        config_scroll.setWidget(config_widget)
+
         analysis_widget = QWidget()
         analysis_layout = QVBoxLayout(analysis_widget)
-        mission_right_splitter = QSplitter(Qt.Orientation.Vertical)
-        mission_right_splitter.addWidget(self._build_mission_globe_panel())
-        analysis_tabs = self._build_analysis_tabs()
-        mission_right_splitter.addWidget(analysis_tabs)
-        mission_right_splitter.setStretchFactor(0, 2)
-        mission_right_splitter.setStretchFactor(1, 3)
-        analysis_layout.addWidget(mission_right_splitter)
+        # Mission tab now focuses on configuration + orbit overview globe.
+        analysis_layout.addWidget(self._build_mission_globe_panel())
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(config_widget)
+        splitter.addWidget(config_scroll)
         splitter.addWidget(analysis_widget)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
@@ -131,10 +152,19 @@ class MissionTabMixin:
         """Create widgets for the orbital elements."""
         group = QGroupBox("Initial State")
         form = QFormLayout(group)
-        self.sma_input = QDoubleSpinBox()
-        self.sma_input.setRange(6378.0, 50000.0)
-        self.sma_input.setValue(6628.0)
-        self.sma_input.setSuffix(" km")
+        # Primary orbit size input is geodetic altitude above the WGS-84 ellipsoid.
+        self.altitude_input = QDoubleSpinBox()
+        self.altitude_input.setRange(80.0, 50_000.0)
+        self.altitude_input.setDecimals(1)
+        self.altitude_input.setSingleStep(5.0)
+        self.altitude_input.setValue(250.0)
+        self.altitude_input.setSuffix(" km")
+
+        from PySide6.QtWidgets import QCheckBox
+
+        self.sso_checkbox = QCheckBox("Sun-synchronous (SSO)")
+        self.sso_checkbox.setChecked(False)
+        self.sso_checkbox.stateChanged.connect(self._handle_sso_toggle)  # type: ignore[arg-type]
         self.ecc_input = QDoubleSpinBox()
         self.ecc_input.setRange(0.0, 0.99)
         self.ecc_input.setDecimals(5)
@@ -149,16 +179,17 @@ class MissionTabMixin:
         self.raan_input.setSuffix(" °")
         self.argp_input = QDoubleSpinBox()
         self.argp_input.setRange(0.0, 360.0)
-        self.argp_input.setValue(0.0)
+        self.argp_input.setValue(90.0)
         self.argp_input.setSuffix(" °")
         self.mean_anom_input = QDoubleSpinBox()
         self.mean_anom_input.setRange(0.0, 360.0)
         self.mean_anom_input.setValue(0.0)
         self.mean_anom_input.setSuffix(" °")
-        form.addRow("Semi-major axis:", self.sma_input)
-        self.sma_input.valueChanged.connect(lambda *_: self._mark_dirty())
+        form.addRow("Geodetic altitude:", self.altitude_input)
+        self.altitude_input.valueChanged.connect(self._handle_orbit_size_changed)  # type: ignore[arg-type]
+        form.addRow("", self.sso_checkbox)
         form.addRow("Eccentricity:", self.ecc_input)
-        self.ecc_input.valueChanged.connect(lambda *_: self._mark_dirty())
+        self.ecc_input.valueChanged.connect(self._handle_orbit_shape_changed)  # type: ignore[arg-type]
         form.addRow("Inclination:", self.inc_input)
         self.inc_input.valueChanged.connect(lambda *_: self._mark_dirty())
         form.addRow("RAAN:", self.raan_input)
@@ -168,6 +199,68 @@ class MissionTabMixin:
         form.addRow("Mean Anomaly:", self.mean_anom_input)
         self.mean_anom_input.valueChanged.connect(lambda *_: self._mark_dirty())
         return group
+
+    def _sso_rate_rad_s(self) -> float:
+        return 2.0 * math.pi / (float(self._TROPICAL_YEAR_DAYS) * 86400.0)
+
+    def _compute_sso_inclination_deg(self, *, altitude_km: float, eccentricity: float) -> float | None:
+        """Return the Sun-synchronous inclination (deg) for the requested orbit size/shape."""
+        alt = float(altitude_km)
+        e = float(eccentricity)
+        if not (math.isfinite(alt) and math.isfinite(e)):
+            return None
+        if e < 0.0 or e >= 1.0:
+            return None
+        a_km = float(self._WGS84_EQUATORIAL_RADIUS_KM) + alt
+        if a_km <= 0.0:
+            return None
+        p_km = a_km * (1.0 - e * e)
+        if p_km <= 0.0:
+            return None
+        n = math.sqrt(float(self._EARTH_MU_KM3_S2) / (a_km**3))  # rad/s
+        if not math.isfinite(n) or n <= 0.0:
+            return None
+        rate = self._sso_rate_rad_s()
+        cos_i = -rate * (2.0 / (3.0 * float(self._WGS84_J2))) * ((p_km / float(self._WGS84_EQUATORIAL_RADIUS_KM)) ** 2) * (1.0 / n)
+        if not math.isfinite(cos_i):
+            return None
+        if cos_i < -1.0 or cos_i > 1.0:
+            return None
+        inc_rad = math.acos(cos_i)
+        return math.degrees(inc_rad)
+
+    def _apply_sso_if_enabled(self) -> None:
+        """If SSO is enabled, compute and lock the inclination."""
+        if getattr(self, "sso_checkbox", None) is None or getattr(self, "inc_input", None) is None:
+            return
+        if not self.sso_checkbox.isChecked():
+            self.inc_input.setEnabled(True)
+            return
+        alt = float(getattr(self, "altitude_input").value()) if getattr(self, "altitude_input", None) is not None else 0.0
+        ecc = float(getattr(self, "ecc_input").value()) if getattr(self, "ecc_input", None) is not None else 0.0
+        inc = self._compute_sso_inclination_deg(altitude_km=alt, eccentricity=ecc)
+        if inc is None:
+            # Leave the existing inclination editable if no solution can be computed.
+            self.inc_input.setEnabled(True)
+            return
+        self.inc_input.blockSignals(True)
+        try:
+            self.inc_input.setValue(float(inc))
+        finally:
+            self.inc_input.blockSignals(False)
+        self.inc_input.setEnabled(False)
+
+    def _handle_sso_toggle(self, _state: int) -> None:
+        self._apply_sso_if_enabled()
+        self._mark_dirty()
+
+    def _handle_orbit_size_changed(self, *_args) -> None:
+        self._apply_sso_if_enabled()
+        self._mark_dirty()
+
+    def _handle_orbit_shape_changed(self, *_args) -> None:
+        self._apply_sso_if_enabled()
+        self._mark_dirty()
 
     def _build_scenario_group(self) -> QGroupBox:
         """Create date/time controls for the scenario window."""
@@ -191,35 +284,54 @@ class MissionTabMixin:
         return group
 
     def _build_propagation_group(self) -> QGroupBox:
-        """Create controls for propagator selection and sampling."""
-        group = QGroupBox("Propagation & Access")
-        form = QFormLayout(group)
+        """Create controls for propagation and high-level analysis options."""
+        group = QGroupBox("Analysis Configuration")
+        layout = QVBoxLayout(group)
+        form = QFormLayout()
         self.propagator_combo = QComboBox()
-        self.propagator_combo.addItems(["numerical", "keplerian"])
-        self.min_elev_input = QDoubleSpinBox()
-        self.min_elev_input.setRange(0.0, 90.0)
-        self.min_elev_input.setValue(0.5)
+        # Mean-IC solver is always applied, which requires numerical propagation.
+        self.propagator_combo.addItems(["numerical"])
+        self.propagator_combo.setEnabled(False)
         self.sample_step_input = QSpinBox()
-        self.sample_step_input.setRange(10, 3600)
+        # Allow single-digit seconds (e.g. 1–9s) for high-resolution sampling.
+        self.sample_step_input.setRange(1, 3600)
         self.sample_step_input.setValue(60)
+        form.addRow("Propagator:", self.propagator_combo)
+        self.propagator_combo.currentIndexChanged.connect(lambda *_: self._mark_dirty())
+        form.addRow("Sample Step (s):", self.sample_step_input)
+        self.sample_step_input.valueChanged.connect(lambda *_: self._mark_dirty())
+        layout.addLayout(form)
+
+        # Ground-station analysis settings and toggles
+        from PySide6.QtWidgets import QCheckBox
+
+        self.gs_access_group = QGroupBox("Ground-station Pass Settings")
+        gs_form = QFormLayout(self.gs_access_group)
+        self.ground_pass_checkbox = getattr(self, "ground_pass_checkbox", None)
+        if self.ground_pass_checkbox is None:
+            self.ground_pass_checkbox = QCheckBox("Include ground-station passes")
+        # Default ON so the user immediately gets pass outputs after a run.
+        self.ground_pass_checkbox.setChecked(True)
+        self.ground_pass_checkbox.stateChanged.connect(
+            self._handle_analysis_options_changed
+        )  # type: ignore[arg-type]
+        gs_form.addRow(self.ground_pass_checkbox)
+        layout.addWidget(self.gs_access_group)
+
+        # Drag configuration in its own box
         self.drag_checkbox = getattr(self, "drag_checkbox", None)
         if self.drag_checkbox is None:
             from PySide6.QtWidgets import QCheckBox
 
+            # Keep the label simple as requested.
             self.drag_checkbox = QCheckBox("Include drag")
-        self.drag_checkbox.setChecked(True)
+        # Default OFF.
+        self.drag_checkbox.setChecked(False)
         self.drag_checkbox.stateChanged.connect(self._handle_drag_toggle)  # type: ignore[arg-type]
-        form.addRow("Propagator:", self.propagator_combo)
-        self.propagator_combo.currentIndexChanged.connect(lambda *_: self._mark_dirty())
-        form.addRow("Min Elevation (deg):", self.min_elev_input)
-        self.min_elev_input.valueChanged.connect(lambda *_: self._mark_dirty())
-        form.addRow("Sample Step (s):", self.sample_step_input)
-        self.sample_step_input.valueChanged.connect(lambda *_: self._mark_dirty())
-        form.addRow("Drag:", self.drag_checkbox)
         self.drag_area_input = QDoubleSpinBox()
         self.drag_area_input.setRange(0.01, 100.0)
         self.drag_area_input.setSingleStep(0.05)
-        self.drag_area_input.setValue(2.0)
+        self.drag_area_input.setValue(0.43)
         self.drag_area_input.setSuffix(" m²")
         self.drag_area_input.valueChanged.connect(
             lambda *_: self._handle_drag_parameters_changed()
@@ -227,7 +339,7 @@ class MissionTabMixin:
         self.drag_cd_input = QDoubleSpinBox()
         self.drag_cd_input.setRange(1.0, 5.0)
         self.drag_cd_input.setSingleStep(0.1)
-        self.drag_cd_input.setValue(2.2)
+        self.drag_cd_input.setValue(3.0)
         self.drag_cd_input.valueChanged.connect(
             lambda *_: self._handle_drag_parameters_changed()
         )
@@ -239,13 +351,25 @@ class MissionTabMixin:
         params_layout.addRow("Drag coefficient:", self.drag_cd_input)
         params_layout.addRow("C_d × A:", self.drag_cd_area_label)
         self.drag_params_group.setEnabled(self.drag_checkbox.isChecked())
-        form.addRow(self.drag_params_group)
+
+        self.drag_group = QGroupBox("Drag Configuration")
+        drag_form = QFormLayout(self.drag_group)
+        # Just show the checkbox with its label, without an extra \"Enable drag:\"
+        # caption row.
+        drag_form.addRow(self.drag_checkbox)
+        drag_form.addRow(self.drag_params_group)
+        layout.addWidget(self.drag_group)
+
+        # Initialise drag-related derived fields and control states.
         self._handle_drag_parameters_changed()
+        # Keep SSO inclination updated if enabled.
+        self._apply_sso_if_enabled()
         return group
 
     def _handle_drag_toggle(self, state: int) -> None:
         """Enable or disable drag configuration controls."""
-        enabled = state == Qt.CheckState.Checked
+        _ = state
+        enabled = bool(getattr(self, "drag_checkbox", None) and self.drag_checkbox.isChecked())
         if hasattr(self, "drag_params_group") and self.drag_params_group is not None:
             self.drag_params_group.setEnabled(enabled)
         self._mark_dirty()
@@ -254,6 +378,14 @@ class MissionTabMixin:
     def _handle_drag_parameters_changed(self) -> None:
         """React to drag parameter input changes."""
         self._update_drag_cd_area()
+        self._mark_dirty()
+
+    def _handle_analysis_options_changed(self, state: int) -> None:
+        """React to analysis option toggles (e.g., ground-station passes)."""
+        _ = state
+        enabled = self.ground_pass_checkbox.isChecked()
+        # Keep the checkbox active so the user can re-enable GS passes.
+        _ = enabled
         self._mark_dirty()
 
     def _update_drag_cd_area(self) -> None:
