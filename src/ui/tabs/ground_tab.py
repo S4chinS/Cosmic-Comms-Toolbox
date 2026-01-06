@@ -532,4 +532,6 @@ class GroundTabMixin:
         self._populate_station_table(self._station_presets)
         self._prefill_manual_inputs()
         self._refresh_link_budget_station_list()
+        self._update_station_map()
+        self._mark_dirty()
 
