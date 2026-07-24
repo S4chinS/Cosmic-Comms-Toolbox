@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.tools.link_budget_profile import main
+from cosmic_toolbox.tools.link_budget_profile import main
 
 
 if __name__ == "__main__":

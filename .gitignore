@@ -26,6 +26,7 @@ wheels/
 # IDEs
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
@@ -36,5 +37,30 @@ Thumbs.db
 
 # Archives and snapshots
 resources/archive/
+
+# Outputs (generated artifacts - can be very large)
+outputs/
+*.mp4
+
+# FEKO far-field exports (large, regenerable)
+*.ffe
+
+# Generated antenna LUT theta sweeps (large)
+src/cosmic_toolbox/resources/antenna_luts/theta_sweep/
+
+# Runtime logs
+*.log
+
+# Frontend (React + Cesium SPA)
+frontend/node_modules/
+frontend/dist/
+frontend/public/textures/
+frontend/src/api/openapi.json
+frontend/src/api/openapi.d.ts
+frontend/.vite/
+frontend/.env.local
+
+# Pytest tmp dir (workaround for AppData permissions)
+.pytest_tmp/
 
 /.claude

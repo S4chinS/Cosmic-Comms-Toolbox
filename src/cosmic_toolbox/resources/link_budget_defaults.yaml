@@ -1,0 +1,51 @@
+# Canonical link-budget defaults for the whole toolbox.
+#
+# This file is the SINGLE source of truth for RF / link-budget parameter
+# defaults.  The core dataclasses (ArchitectureConfig, LinkBudgetInputs),
+# the GUI link-budget tools, the web API, and every analysis script in
+# scripts/ read their defaults from here via
+# cosmic_toolbox.link_budget_defaults.load_link_budget_defaults().
+#
+# Values were chosen as the consensus (most common) value across the
+# codebase when the defaults were unified.  A script or tool that needs a
+# different value must override it EXPLICITLY at its call site so the
+# deviation is visible in review — never by editing a private copy.
+#
+# The XLSX export tool (LinkBudgetExportConfig) intentionally keeps its own
+# extended config because it models a specific documented ground-segment
+# spreadsheet; drive it from a YAML like configs/link_budget_example.yaml.
+
+# ── Carrier ────────────────────────────────────────────────────────────────
+frequency_GHz: 2.212            # S-band downlink centre frequency
+uplink_frequency_MHz: 2106.0    # S-band TT&C uplink centre frequency
+
+# ── Transmitter (spacecraft) ───────────────────────────────────────────────
+tx_power_dBw: 0.0
+tx_losses_dB: 2.0               # feeder/harness loss between PA and antenna
+tx_backoff_dB: 0.0
+tx_boresight_gain_dBi: 5.41     # fixed-gain fallback; LUT-driven paths ignore it
+
+# ── Receiver (ground station) ──────────────────────────────────────────────
+# Two mutually exclusive representations (gs_gt_dBK wins when supplied to
+# calculate_link_budget): a fixed G/T, or the three-parameter breakdown.
+gs_gt_dBK: 12.0                 # 3.7 m S-band dish figure
+rx_antenna_gain_dBi: 34.0
+receiver_noise_figure_dB: 1.5
+sky_background_temperature_K: 50.0   # clear-sky; 290 K would be warm ground
+receiver_losses_dB: 0.0
+
+# ── Channel / waveform ─────────────────────────────────────────────────────
+symbol_rate_Msps: 2.0
+rolloff: 0.25
+operating_mode: VCM             # "VCM" or "Fixed MODCOD"
+fixed_modcod_name: QPSK 1/2     # used only when operating_mode is Fixed MODCOD
+
+# ── Losses and margin ──────────────────────────────────────────────────────
+polarization_loss_dB: 0.1
+implementation_loss_dB: 1.0
+margin_dB: 6.0
+unavailability_percent: 0.1     # ITU-R exceedance probability for atmos. loss
+
+# ── Geometry ───────────────────────────────────────────────────────────────
+satellite_altitude_km: 550.0
+min_elevation_deg: 5.0          # access-detection elevation mask

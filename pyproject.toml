@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosmic-toolbox"
+version = "0.1.0"
+description = "Orekit-backed ground-station access analysis and link-budget toolbox with optional PySide6 GUI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "orekit>=12.0",
+    "itur>=0.4",
+    "astropy>=5.0",
+    "PyYAML>=6.0",
+    "tqdm>=4.66",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PySide6>=6.6",
+    "pyqtgraph>=0.13",
+    "matplotlib>=3.8",
+    "cartopy>=0.22",
+    "moderngl>=5.8",
+    "imageio>=2.37.0",
+    "imageio-ffmpeg>=0.6.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+cosmic-toolbox = "cosmic_toolbox.cli:main"
+cosmic-toolbox-gui = "cosmic_toolbox_gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cosmic_toolbox = ["resources/**/*"]
+cosmic_toolbox_gui = ["resources/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["outputs", "external", "data"]
+
+[tool.ruff.lint]
+# Pragmatic set: real errors (pyflakes) + pycodestyle, minus line-length.
+# Import-ordering (I/isort) is intentionally NOT enforced — the existing
+# codebase does not follow isort and reordering would be noisy churn.
+select = ["E", "F", "W"]
+ignore = ["E501"]  # long lines are common in tabular analysis code
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/cosmic_toolbox"]
+ignore_missing_imports = true   # Orekit Java bindings have no stubs
+warn_unused_ignores = false
+check_untyped_defs = false

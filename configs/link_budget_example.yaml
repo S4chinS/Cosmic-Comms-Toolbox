@@ -1,0 +1,68 @@
+# Example link-budget export config for `cosmic-toolbox export-link-budget`.
+#
+#   cosmic-toolbox export-link-budget configs/link_budget_example.yaml -o link_budget.xlsx
+#
+# Any omitted key falls back to the defaults in LinkBudgetExportConfig.
+# Atmospheric loss can be given explicitly (ul_/dl_atmospheric_loss_*_dB) OR,
+# if those are set to null and latitude_deg/longitude_deg are provided, it is
+# computed with the toolbox ITU-R slant-path model.
+
+title: Link Budget
+ground_station_name: "Svalbard, NO"
+
+# Common geometry
+satellite_altitude_km: 250.0
+slant_elevation_deg: 5.0
+ground_altitude_km: 0.484
+# latitude_deg: 78.23          # uncomment (with longitude) to compute ITU losses
+# longitude_deg: 15.39
+unavailability_percent: 0.1
+system_margin_dB: 6.0
+
+# Uplink (Ground -> Spacecraft)
+ul_frequency_MHz: 2106.0
+ul_modulation_type: BPSK
+ul_modulation_order: 1
+ul_coding_label: "BCH Coding Rate (63,56)"
+ul_coding_rate: 0.8889
+ul_rolloff: 0.5
+ul_symbol_rate_ksps: 512.0
+ul_gs_eirp_dBW: 44.0
+ul_pointing_loss_dB: 0.0
+ul_atmospheric_loss_slant_dB: 1.14
+ul_atmospheric_loss_nadir_dB: 0.07
+ul_atmospheric_temperature_K: 266.0
+ul_background_noise_temp_K: 255.0
+ul_sc_rx_antenna_gain_dBi: 6.5
+ul_polarization_loss_dB: 0.5
+ul_sc_mispointing_loss_dB: 0.5
+ul_sc_harness_loss_dB: 2.0
+ul_sc_receiver_noise_figure_dB: 3.0
+ul_required_ebn0_dB: 9.6
+
+# Downlink (Spacecraft -> Ground)
+dl_frequency_MHz: 2212.0
+dl_modulation_type: QPSK
+dl_modulation_order: 2
+dl_coding_label: "Viterbi k=7 r = 1/2 coding rate"
+dl_coding_rate: 0.5
+dl_rolloff: 0.5
+dl_symbol_rate_ksps: 2000.0
+dl_tx_power_dBW: 0.0
+dl_tx_harness_loss_dB: 4.0
+dl_tx_antenna_gain_slant_dBi: -1.0
+dl_tx_antenna_gain_nadir_dBi: 6.0
+dl_pointing_loss_dB: 0.0
+dl_implementation_loss_dB: 1.5
+dl_atmospheric_loss_slant_dB: 1.17
+dl_atmospheric_loss_nadir_dB: 0.07
+dl_atmospheric_temperature_K: 266.0
+dl_background_noise_temp_K: 50.0
+dl_rx_antenna_gain_dBi: 34.66
+dl_polarization_loss_dB: 0.5
+dl_mispointing_loss_dB: 0.0
+dl_system_noise_temperature_K: 187.0
+# Consumed as an Es/N0 threshold (C/N0 - 10log10(symbol_rate)); equals Eb/N0
+# only because QPSK Viterbi r=1/2 has unity net spectral efficiency (0 dB).
+dl_required_ebn0_dB: 4.5
+include_pfd: true
